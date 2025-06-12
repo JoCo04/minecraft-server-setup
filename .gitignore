@@ -1,1 +1,11 @@
+# Terraform
+infra/.terraform/
+infra/terraform.tfstate*
+infra/terraform.tfvars
+
+# SSH keys
+*.pem
+
+# Misc
+*.log
 

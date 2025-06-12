@@ -1,9 +1,11 @@
+---
 - hosts: minecraft
-  become: true
+  become: yes
+
   tasks:
-    - name: Install Java
-      yum:
-        name: java-17-amazon-corretto
+    - name: Install Java 21 (Amazon Corretto)
+      package:
+        name: java-21-amazon-corretto-devel
         state: present
 
     - name: Create Minecraft directory
@@ -11,20 +13,52 @@
         path: /home/ec2-user/minecraft
         state: directory
         owner: ec2-user
+        mode: '0755'
 
-    - name: Download server jar
+    - name: Fetch Minecraft version manifest
+      uri:
+        url: https://launchermeta.mojang.com/mc/game/version_manifest.json
+        return_content: yes
+      register: version_manifest
+
+    - name: Determine latest release ID
+      set_fact:
+        latest_release: "{{ (version_manifest.content | from_json).latest.release }}"
+
+    - name: Find version details URL
+      set_fact:
+        version_details_url: >-
+          {{ (version_manifest.content | from_json).versions
+             | selectattr('id', 'equalto', latest_release)
+             | map(attribute='url')
+             | first }}
+
+    - name: Fetch details for latest release
+      uri:
+        url: "{{ version_details_url }}"
+        return_content: yes
+      register: version_details
+
+    - name: Extract server.jar URL
+      set_fact:
+        server_jar_url: "{{ (version_details.content | from_json).downloads.server.url }}"
+
+    - name: Download the Minecraft server jar
       get_url:
-        url: https://piston-data.mojang.com/v1/objects/e6ec2f64e6080b9b5d9b471b291c33cc7f509733/server.jar
+        url: "{{ server_jar_url }}"
         dest: /home/ec2-user/minecraft/server.jar
         owner: ec2-user
+        mode: '0755'
 
-    - name: Accept EULA
+
+    - name: Accept the EULA
       copy:
         dest: /home/ec2-user/minecraft/eula.txt
         content: "eula=true\n"
         owner: ec2-user
+        mode: '0644'
 
-    - name: Create systemd service
+    - name: Create systemd service file
       copy:
         dest: /etc/systemd/system/minecraft.service
         content: |
@@ -35,22 +69,18 @@
           [Service]
           User=ec2-user
           WorkingDirectory=/home/ec2-user/minecraft
-          ExecStart=/usr/bin/java -Xmx1G -Xms1G -jar server.jar nogui
-          ExecStop=/bin/kill -s SIGINT $MAINPID
+          ExecStart=/usr/lib/jvm/java-21-amazon-corretto/bin/java -Xmx1G -Xms1G -jar server.jar nogui
           Restart=on-failure
 
           [Install]
           WantedBy=multi-user.target
-      notify:
-        - reload systemd
+        mode: '0644'
 
-    - name: Start Minecraft
+    - name: Reload systemd
+      command: systemctl daemon-reload
+
+    - name: Enable & start Minecraft
       systemd:
         name: minecraft
-        enabled: yes
         state: started
-
-  handlers:
-    - name: reload systemd
-      command: systemctl daemon-reexec
-
+        enabled: yes
